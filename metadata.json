@@ -1,0 +1,6 @@
+{
+  "name": "FITFORM",
+  "description": "FITFORM — 3D Open-World Fitness Simulator. Your World. Your Body. Your Progress.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
