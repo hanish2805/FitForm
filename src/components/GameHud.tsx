@@ -12,6 +12,7 @@ interface GameHudProps {
   activeWaypoint: LocationId | null;
   showHud: boolean;
   mobileControlsMode: 'auto' | 'on' | 'off';
+  isPointerLocked: boolean;
   onInteractClick: () => void;
   onOpenMap: () => void;
   onOpenPause: () => void;
@@ -31,6 +32,7 @@ export function GameHud({
   activeWaypoint,
   showHud,
   mobileControlsMode,
+  isPointerLocked,
   onInteractClick,
   onOpenMap,
   onOpenPause,
@@ -94,6 +96,12 @@ export function GameHud({
 
   return (
     <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between p-3 sm:p-5">
+      {!showTouch && isPointerLocked && (
+        <div
+          aria-hidden="true"
+          className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-white/60 border border-black/40 pointer-events-none"
+        />
+      )}
       {/* TOP BAR */}
       <div className="flex items-start justify-between gap-4">
         {/* Top-Left: Level, XP, Coins & Location */}
@@ -256,6 +264,10 @@ export function GameHud({
                 setKnob({ x: 0, y: 0 });
                 onMobileMove(0, 0);
               }}
+              onPointerCancel={() => {
+                setKnob({ x: 0, y: 0 });
+                onMobileMove(0, 0);
+              }}
               className="relative w-24 h-24 rounded-full bg-[#080B09]/80 border border-white/20 touch-none"
             >
               <div
@@ -315,7 +327,9 @@ export function GameHud({
           </div>
 
           <div className="hidden md:block px-3 py-1.5 rounded-lg bg-[#080B09]/85 border border-white/10 text-[11px] text-[#A5ACA6]">
-            WASD Move · Drag Mouse / L Lock Camera · Space Jump · Shift Sprint · E Interact · M Map · Esc Pause
+            {isPointerLocked
+              ? 'Mouse Look Active · Move Mouse to Aim · LMB / E Interact · Space Jump · Shift Sprint · Esc Show Cursor'
+              : 'Click Game to Lock Mouse · WASD Move · Space Jump · Shift Sprint · E Interact · M Map · Esc Pause'}
           </div>
         </div>
       </div>

@@ -134,7 +134,7 @@ export function MainMenu({
 
       {/* Bottom Flat Control Hint Line */}
       <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 text-xs text-[#A5ACA6] pointer-events-auto">
-        <span>WASD Move · Mouse Orbit · Space Jump · Shift Sprint · E Interact · M Map · Esc Pause</span>
+        <span>WASD Move · Mouse Look (Click) · Space Jump · Shift Sprint · E Interact · M Map · Esc Unlock / Pause</span>
         <span className="font-mono-num text-[#8DAF26]">3D OPEN-WORLD FITNESS SIMULATOR</span>
       </div>
     </div>

@@ -95,6 +95,7 @@ export default function App() {
   const [stamina, setStamina] = useState(100);
   const [playerPos, setPlayerPos] = useState({ x: 0, z: 3, yaw: Math.PI });
   const [activeWaypoint, setActiveWaypoint] = useState<LocationId | null>(null);
+  const [isPointerLocked, setIsPointerLocked] = useState(false);
   const [toasts, setToasts] = useState<ToastBanner[]>([]);
   const [levelUpBanner, setLevelUpBanner] = useState<number | null>(null);
 
@@ -233,6 +234,7 @@ export default function App() {
         },
         onStaminaChange: (val) => setStamina(val),
         onPlayerMove: (x, z, yaw) => setPlayerPos({ x, z, yaw }),
+        onPointerLockChange: (locked) => setIsPointerLocked(locked),
       },
     );
 
@@ -275,6 +277,10 @@ export default function App() {
       }
 
       if (screenRef.current === 'playing') {
+        if (engineRef.current?.shouldSuppressEscapePause()) {
+          engineRef.current.releasePointerLock();
+          return;
+        }
         setActiveModal('pause');
         engineRef.current?.setMode('menu');
       }
@@ -582,6 +588,7 @@ export default function App() {
           activeWaypoint={activeWaypoint}
           showHud={settings.showHud}
           mobileControlsMode={settings.mobileControlsMode}
+          isPointerLocked={isPointerLocked}
           onInteractClick={() => engineRef.current?.triggerInteract()}
           onOpenMap={() => {
             soundEngine.playClick();

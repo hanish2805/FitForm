@@ -9,6 +9,16 @@ import {
   LocationId,
 } from '../types/game';
 import { soundEngine } from './audio';
+import {
+  applyCameraLookDelta,
+  CameraLookState,
+  createCameraLookState,
+  POINTER_LOCK_BASE_SENS,
+  shouldSuppressEscapePause,
+  snapCameraLook,
+  stepCameraLookDamping,
+  TOUCH_ORBIT_BASE_SENS,
+} from './cameraLook';
 import { CharacterAnimState, CharacterRig, createCharacterRig } from './characterRig';
 import { isSoftwareWebGL } from './glUtils';
 import {
@@ -31,6 +41,7 @@ export interface EngineCallbacks {
   onMapToggle: () => void;
   onStaminaChange: (stamina: number) => void;
   onPlayerMove: (x: number, z: number, yaw: number) => void;
+  onPointerLockChange?: (locked: boolean) => void;
 }
 
 // Pre-allocated math scratchpads (zero GC in render loop)
@@ -60,11 +71,12 @@ export class GameEngine {
   private kinematics: PlayerKinematicsState = createInitialPlayerState(0, 0, 3, Math.PI);
   private stepAccum = 0;
 
-  // Camera orbit state
-  private camYaw = Math.PI;
-  private camPitch = 0.28;
-  private camDist = 6.2;
+  // Camera orbit & pointer-lock state
+  private cameraLook: CameraLookState = createCameraLookState(Math.PI, 0.28, 6.2);
   private currentCamPos = new THREE.Vector3(0, 3.5, 9.5);
+  private pointerLocked = false;
+  private pointerLockBlocked = false;
+  private lastPointerUnlockAt = 0;
   private isDraggingCamera = false;
   private activePointerId: number | null = null;
   private lastPointerX = 0;
@@ -124,6 +136,7 @@ export class GameEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.applyQualitySettings(initialSettings);
 
+    this.renderer.domElement.style.touchAction = 'none';
     container.appendChild(this.renderer.domElement);
 
     // Scene & horizon-matched fog
@@ -211,7 +224,58 @@ export class GameEngine {
     this.mode = mode;
     if (mode !== 'gameplay') {
       this.clearKeys();
+      this.isDraggingCamera = false;
+      this.activePointerId = null;
+      this.releasePointerLock();
     }
+  }
+
+  public isPointerLocked(): boolean {
+    return this.pointerLocked || document.pointerLockElement === this.renderer.domElement;
+  }
+
+  public shouldSuppressEscapePause(): boolean {
+    return shouldSuppressEscapePause(
+      this.isPointerLocked(),
+      this.lastPointerUnlockAt,
+      performance.now(),
+    );
+  }
+
+  public requestPointerLock() {
+    if (this.mode !== 'gameplay' || this.disposed) return;
+    const dom = this.renderer.domElement;
+    if (document.pointerLockElement === dom || !dom.requestPointerLock) return;
+    try {
+      const maybePromise = dom.requestPointerLock() as unknown as Promise<void> | undefined;
+      if (maybePromise && typeof maybePromise.catch === 'function') {
+        maybePromise.catch(() => {
+          this.pointerLockBlocked = true;
+        });
+      }
+    } catch {
+      this.pointerLockBlocked = true;
+    }
+  }
+
+  public releasePointerLock() {
+    if (document.pointerLockElement === this.renderer.domElement) {
+      try {
+        document.exitPointerLock?.();
+      } catch {
+        // ignore exit errors
+      }
+    }
+  }
+
+  public handleMouseLookDelta(dx: number, dy: number) {
+    this.cameraLook = applyCameraLookDelta(
+      this.cameraLook,
+      dx,
+      dy,
+      this.settings.mouseSensitivity,
+      POINTER_LOCK_BASE_SENS,
+    );
   }
 
   public setCharacterConfig(config: CharacterConfig) {
@@ -232,16 +296,17 @@ export class GameEngine {
     this.currentLocation = resolveLocationForPosition(x, z, this.currentLocation);
 
     if (snapCamera) {
-      const horiz = Math.cos(this.camPitch) * this.camDist;
-      const vert = Math.sin(this.camPitch) * this.camDist + 1.48;
+      this.cameraLook = snapCameraLook(this.cameraLook);
+      const horiz = Math.cos(this.cameraLook.pitch) * this.cameraLook.distance;
+      const vert = Math.sin(this.cameraLook.pitch) * this.cameraLook.distance + 1.48;
       _camLookTarget.set(x, y + 1.28, z);
       const safeCam = resolveCameraOcclusion(
         _camLookTarget.x,
         _camLookTarget.y,
         _camLookTarget.z,
-        x + Math.sin(this.camYaw) * horiz,
-        y + vert,
-        z + Math.cos(this.camYaw) * horiz,
+        x + Math.sin(this.cameraLook.yaw) * horiz,
+        Math.max(y + 0.35, y + vert),
+        z + Math.cos(this.cameraLook.yaw) * horiz,
         this.world.collisionData.colliders,
       );
       this.currentCamPos.set(safeCam.x, safeCam.y, safeCam.z);
@@ -254,8 +319,8 @@ export class GameEngine {
 
     this.lastReportedX = x;
     this.lastReportedZ = z;
-    this.lastReportedYaw = this.camYaw;
-    this.callbacks.onPlayerMove(x, z, this.camYaw);
+    this.lastReportedYaw = this.cameraLook.yaw;
+    this.callbacks.onPlayerMove(x, z, this.cameraLook.yaw);
   }
 
   public setWorkoutState(active: boolean, exerciseId: ExerciseId | null, facingAngle?: number) {
@@ -318,9 +383,13 @@ export class GameEngine {
   }
 
   public rotateCameraBy(dx: number, dy: number) {
-    const sens = 0.0045 * this.settings.cameraSensitivity;
-    this.camYaw -= dx * sens;
-    this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * sens, -0.05, 1.05);
+    this.cameraLook = applyCameraLookDelta(
+      this.cameraLook,
+      dx,
+      dy,
+      this.settings.cameraSensitivity,
+      TOUCH_ORBIT_BASE_SENS,
+    );
   }
 
   private clearKeys = () => {
@@ -350,15 +419,10 @@ export class GameEngine {
     } else if (e.code === 'KeyM') {
       this.callbacks.onMapToggle();
     } else if (e.code === 'KeyL') {
-      // Optional mouse pointer-lock toggle (gracefully ignored if restricted by iframe)
-      try {
-        if (document.pointerLockElement === this.renderer.domElement) {
-          document.exitPointerLock?.();
-        } else {
-          this.renderer.domElement.requestPointerLock?.();
-        }
-      } catch {
-        // Fallback to drag look
+      if (this.isPointerLocked()) {
+        this.releasePointerLock();
+      } else {
+        this.requestPointerLock();
       }
     }
   };
@@ -367,31 +431,75 @@ export class GameEngine {
     this.keys[e.code] = false;
   };
 
+  private onPointerLockChange = () => {
+    const locked = document.pointerLockElement === this.renderer.domElement;
+    const wasLocked = this.pointerLocked;
+    this.pointerLocked = locked;
+    if (locked) {
+      this.pointerLockBlocked = false;
+      this.isDraggingCamera = false;
+      this.activePointerId = null;
+    } else if (wasLocked && this.mode === 'gameplay') {
+      this.lastPointerUnlockAt = performance.now();
+    }
+    this.callbacks.onPointerLockChange?.(locked);
+  };
+
+  private onPointerLockError = () => {
+    this.pointerLockBlocked = true;
+    this.pointerLocked = false;
+    this.callbacks.onPointerLockChange?.(false);
+  };
+
+  private onLockedMouseMove = (e: MouseEvent) => {
+    if (this.mode !== 'gameplay' || !this.isPointerLocked()) return;
+    this.handleMouseLookDelta(e.movementX, e.movementY);
+  };
+
   private onPointerDown = (e: PointerEvent) => {
     soundEngine.unlock();
     if (this.mode !== 'gameplay') return;
-    this.isDraggingCamera = true;
-    this.activePointerId = e.pointerId;
-    this.lastPointerX = e.clientX;
-    this.lastPointerY = e.clientY;
+
+    if (e.pointerType === 'touch') {
+      this.isDraggingCamera = true;
+      this.activePointerId = e.pointerId;
+      this.lastPointerX = e.clientX;
+      this.lastPointerY = e.clientY;
+      return;
+    }
+
+    if (this.isPointerLocked()) {
+      if (e.button === 0 && this.nearbyStation) {
+        this.callbacks.onInteract(this.nearbyStation);
+      }
+      return;
+    }
+
+    if (e.button === 0) {
+      this.requestPointerLock();
+    }
+
+    if (this.pointerLockBlocked) {
+      this.isDraggingCamera = true;
+      this.activePointerId = e.pointerId;
+      this.lastPointerX = e.clientX;
+      this.lastPointerY = e.clientY;
+    }
   };
 
   private onPointerMove = (e: PointerEvent) => {
-    if (this.mode !== 'gameplay') return;
-    if (document.pointerLockElement === this.renderer.domElement) {
-      const sens = 0.0028 * this.settings.mouseSensitivity;
-      this.camYaw -= e.movementX * sens;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * sens, -0.08, 1.08);
-      return;
-    }
+    if (this.mode !== 'gameplay' || this.isPointerLocked()) return;
+    if (e.pointerType !== 'touch' && !this.pointerLockBlocked) return;
     if (!this.isDraggingCamera || (this.activePointerId !== null && e.pointerId !== this.activePointerId)) return;
     const dx = e.clientX - this.lastPointerX;
     const dy = e.clientY - this.lastPointerY;
     this.lastPointerX = e.clientX;
     this.lastPointerY = e.clientY;
-    const sens = 0.0045 * this.settings.mouseSensitivity;
-    this.camYaw -= dx * sens;
-    this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * sens, -0.08, 1.08);
+    if (e.pointerType === 'touch') {
+      this.rotateCameraBy(dx, dy);
+    } else {
+      this.handleMouseLookDelta(dx, dy);
+    }
   };
 
   private onPointerUp = (e: PointerEvent) => {
@@ -403,7 +511,10 @@ export class GameEngine {
 
   private onWheel = (e: WheelEvent) => {
     if (this.mode !== 'gameplay') return;
-    this.camDist = THREE.MathUtils.clamp(this.camDist + e.deltaY * 0.004, 3.2, 11.5);
+    this.cameraLook = {
+      ...this.cameraLook,
+      distance: THREE.MathUtils.clamp(this.cameraLook.distance + e.deltaY * 0.004, 3.2, 11.5),
+    };
   };
 
   private onResize = () => {
@@ -420,10 +531,14 @@ export class GameEngine {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.clearKeys);
     window.addEventListener('resize', this.onResize);
+    document.addEventListener('pointerlockchange', this.onPointerLockChange);
+    document.addEventListener('pointerlockerror', this.onPointerLockError);
+    document.addEventListener('mousemove', this.onLockedMouseMove);
     const dom = this.renderer.domElement;
     dom.addEventListener('pointerdown', this.onPointerDown);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('pointercancel', this.onPointerUp);
     dom.addEventListener('wheel', this.onWheel, { passive: true });
   }
 
@@ -443,6 +558,9 @@ export class GameEngine {
     const jumpPressed = this.jumpBuffered;
     this.jumpBuffered = false;
 
+    // 1.5. Smooth angular camera look damping
+    this.cameraLook = stepCameraLookDamping(this.cameraLook, dt);
+
     // 2. Step deterministic 3D third-person physics & collision solver
     const { next, jumped, landed } = stepPlayerPhysics(
       this.kinematics,
@@ -451,7 +569,7 @@ export class GameEngine {
         right: rightInput,
         sprint: wantsSprint,
         jumpPressed,
-        camYaw: this.camYaw,
+        camYaw: this.cameraLook.yaw,
       },
       this.world.collisionData,
       dt,
@@ -505,13 +623,13 @@ export class GameEngine {
     this.dirLight.target.updateMatrixWorld();
 
     // 5. Third-person damped camera follow with ray-AABB wall avoidance
-    const horiz = Math.cos(this.camPitch) * this.camDist;
-    const vert = Math.sin(this.camPitch) * this.camDist + 1.48;
+    const horiz = Math.cos(this.cameraLook.pitch) * this.cameraLook.distance;
+    const vert = Math.sin(this.cameraLook.pitch) * this.cameraLook.distance + 1.48;
     _camLookTarget.set(this.playerPos.x, this.playerPos.y + 1.28, this.playerPos.z);
     _camGoal.set(
-      this.playerPos.x + Math.sin(this.camYaw) * horiz,
-      this.playerPos.y + vert,
-      this.playerPos.z + Math.cos(this.camYaw) * horiz,
+      this.playerPos.x + Math.sin(this.cameraLook.yaw) * horiz,
+      Math.max(this.playerPos.y + 0.35, this.playerPos.y + vert),
+      this.playerPos.z + Math.cos(this.cameraLook.yaw) * horiz,
     );
 
     const safeCam = resolveCameraOcclusion(
@@ -574,12 +692,12 @@ export class GameEngine {
       if (
         Math.abs(this.playerPos.x - this.lastReportedX) > 0.04 ||
         Math.abs(this.playerPos.z - this.lastReportedZ) > 0.04 ||
-        Math.abs(this.camYaw - this.lastReportedYaw) > 0.02
+        Math.abs(this.cameraLook.yaw - this.lastReportedYaw) > 0.02
       ) {
         this.lastReportedX = this.playerPos.x;
         this.lastReportedZ = this.playerPos.z;
-        this.lastReportedYaw = this.camYaw;
-        this.callbacks.onPlayerMove(this.playerPos.x, this.playerPos.z, this.camYaw);
+        this.lastReportedYaw = this.cameraLook.yaw;
+        this.callbacks.onPlayerMove(this.playerPos.x, this.playerPos.z, this.cameraLook.yaw);
       }
     }
   }
@@ -729,6 +847,7 @@ export class GameEngine {
 
   public dispose() {
     this.disposed = true;
+    this.releasePointerLock();
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
 
@@ -736,8 +855,12 @@ export class GameEngine {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.clearKeys);
     window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    document.removeEventListener('pointerlockerror', this.onPointerLockError);
+    document.removeEventListener('mousemove', this.onLockedMouseMove);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerUp);
 
     const dom = this.renderer.domElement;
     dom.removeEventListener('pointerdown', this.onPointerDown);

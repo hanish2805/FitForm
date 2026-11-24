@@ -134,7 +134,7 @@ export function SettingsModal({
           <div className="p-4 rounded-xl bg-[#080B09] border border-white/10 space-y-3">
             <div>
               <div className="flex justify-between text-xs text-[#A5ACA6] mb-1">
-                <span>Mouse Orbit Sensitivity</span>
+                <span>Mouse Look Sensitivity</span>
                 <span className="font-mono-num">{settings.mouseSensitivity.toFixed(1)}x</span>
               </div>
               <input
@@ -150,7 +150,7 @@ export function SettingsModal({
 
             <div>
               <div className="flex justify-between text-xs text-[#A5ACA6] mb-1">
-                <span>Camera Rotation Sensitivity</span>
+                <span>Touch / Orbit Camera Sensitivity</span>
                 <span className="font-mono-num">{settings.cameraSensitivity.toFixed(1)}x</span>
               </div>
               <input
@@ -192,13 +192,13 @@ export function SettingsModal({
             </h4>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
               <div><strong className="text-white">WASD</strong> <span className="text-[#A5ACA6]">Move</span></div>
-              <div><strong className="text-white">Drag Mouse</strong> <span className="text-[#A5ACA6]">Camera</span></div>
+              <div><strong className="text-white">Click + Move</strong> <span className="text-[#A5ACA6]">Mouse Look</span></div>
               <div><strong className="text-white">Space</strong> <span className="text-[#A5ACA6]">Jump / Rep</span></div>
               <div><strong className="text-white">Shift</strong> <span className="text-[#A5ACA6]">Sprint</span></div>
-              <div><strong className="text-white">E</strong> <span className="text-[#A5ACA6]">Interact</span></div>
+              <div><strong className="text-white">LMB / E</strong> <span className="text-[#A5ACA6]">Interact</span></div>
               <div><strong className="text-white">M</strong> <span className="text-[#A5ACA6]">World Map</span></div>
               <div><strong className="text-white">Scroll</strong> <span className="text-[#A5ACA6]">Zoom</span></div>
-              <div><strong className="text-white">Esc</strong> <span className="text-[#A5ACA6]">Pause</span></div>
+              <div><strong className="text-white">Esc</strong> <span className="text-[#A5ACA6]">Unlock / Pause</span></div>
             </div>
           </div>
 
